@@ -2,99 +2,113 @@ import streamlit as st
 import pandas as pd
 import os
 
-# --- 設定 ---
-FILE_NAME = 'menu_data.csv'
-ALL_ALLERGENS = ["小麦", "卵", "乳", "そば", "落花生", "海老", "蟹", "大豆", "豚肉", "鶏肉", "牛肉"]
+# --- 設定・ファイルパス ---
+COURSE_FILE = 'course_list.csv'
+ALT_FILE = 'alternative_list.csv'
+MASTER_FILE = 'master_config.csv'
 
-st.set_page_config(page_title="店舗用アレルゲン判定システム", layout="wide")
+# --- データの読み込み・保存関数 ---
+def save_data(df, filename):
+    df.to_csv(filename, index=False, encoding='utf-8-sig')
 
-# --- データ読み込み関数 ---
-def load_data():
-    if os.path.exists(FILE_NAME):
-        return pd.read_csv(FILE_NAME)
-    else:
-        # 初期データ（空のデータフレーム）
-        return pd.DataFrame(columns=['コース名', '料理名', '原価', 'アレルゲン', '代案'])
+def load_data(filename, columns):
+    if os.path.exists(filename):
+        return pd.read_csv(filename)
+    return pd.DataFrame(columns=columns)
 
-# --- メイン処理 ---
-df = load_data()
+# --- セッション状態の初期化 ---
+if 'master_dish_types' not in st.session_state:
+    df_m = load_data(MASTER_FILE, ['type', 'value'])
+    st.session_state.master_dish_types = df_m[df_m['type']=='dish']['value'].tolist() or ["麺料理", "汁物", "炒め物"]
+    st.session_state.master_meat_types = df_m[df_m['type']=='meat']['value'].tolist() or ["なし", "豚肉", "牛肉", "鶏肉"]
 
-st.title("👨‍🍳 アレルゲン判定・コース管理システム")
+if 'courses' not in st.session_state:
+    # 簡易的にリストで管理（本来はJSONやDBが望ましいですが、一旦リストで保持）
+    st.session_state.courses = []
 
-# タブで「判定画面」と「編集画面」を分ける
-tab1, tab2 = st.tabs(["🔍 アレルゲン判定", "⚙️ メニュー編集・登録"])
+if 'alternatives' not in st.session_state:
+    # 小麦アレルギー代替品として味噌汁を提案する設定
+    st.session_state.alternatives = [
+        {"name": "味噌汁", "type": "汁物", "meat": "なし", "seasoning": "カツオ出汁・味噌"}
+    ]
 
-# --- タブ1：判定画面 ---
-with tab1:
-    if df.empty:
-        st.info("まずは「メニュー編集」タブから料理を登録してください。")
-    else:
-        st.sidebar.header("1. 条件を選択")
-        course_list = df['コース名'].unique()
-        selected_course = st.sidebar.selectbox("コースを選択", course_list)
-        
-        selected_allergens = st.sidebar.multiselect("除外するアレルゲンを選択", ALL_ALLERGENS)
+st.set_page_config(page_title="コース料理判定システム", layout="wide")
+st.title("コース料理判定システム")
 
-        st.subheader(f"📋 判定結果: {selected_course}")
-        
-        # 選択コースの抽出
-        items = df[df['コース名'] == selected_course]
-        total_cost = 0
-        
-        # 3列で表示
-        cols = st.columns(3)
-        for i, (idx, row) in enumerate(items.iterrows()):
-            with cols[i % 3]:
-                # アレルゲンチェック
-                # 文字列として扱い、選択されたアレルゲンが含まれているか判定
-                matched = [a for a in selected_allergens if a in str(row['アレルゲン'])]
-                
-                if matched:
-                    st.error(f"⚠️ **{row['料理名']}**")
-                    st.write(f"該当: {', '.join(matched)}")
-                    st.warning(f"💡 **代案: {row['代案']}**")
-                else:
-                    st.success(f"✅ **{row['料理名']}**")
-                    st.write("そのまま提供可能")
-                
-                st.caption(f"単体原価: {row['原価']}円")
-                total_cost += int(row['原価'])
+tab1, tab2, tab3, tab4 = st.tabs(["①コース登録", "②詳細(マスタ)登録", "③代案登録", "④判定ページ"])
 
-        st.divider()
-        st.metric(label="コース合計原価", value=f"{total_cost}円")
-
-# --- タブ2：編集画面 ---
+# ②詳細登録 (マスタ)
 with tab2:
-    st.subheader("📝 新しい料理の登録")
-    with st.form("add_form", clear_on_submit=True):
-        c1, c2, c3 = st.columns([2, 2, 1])
-        new_course = c1.text_input("コース名 (例: Aコース)")
-        new_dish = c2.text_input("料理名")
-        new_cost = c3.number_input("原価", min_value=0, step=10)
-        
-        c4, c5 = st.columns(2)
-        new_allergens = c4.multiselect("含まれるアレルゲン", ALL_ALLERGENS)
-        new_alt = c5.text_input("代案 (例: 味噌汁)")
-        
-        submit = st.form_submit_button("データを登録する")
-        
-        if submit and new_course and new_dish:
-            new_data = pd.DataFrame([[new_course, new_dish, new_cost, ",".join(new_allergens), new_alt]], 
-                                    columns=df.columns)
-            df = pd.concat([df, new_data], ignore_index=True)
-            df.to_csv(FILE_NAME, index=False)
-            st.success(f"「{new_dish}」を登録しました！再読み込みします...")
+    st.header("②詳細登録・編集 (マスタ)")
+    col1, col2 = st.columns(2)
+    with col1:
+        new_dish = st.text_input("料理の種類を追加")
+        if st.button("料理種別を追加") and new_dish:
+            st.session_state.master_dish_types.append(new_dish)
+            st.rerun()
+    with col2:
+        new_meat = st.text_input("肉の種類を追加")
+        if st.button("肉種別を追加") and new_meat:
+            st.session_state.master_meat_types.append(new_meat)
             st.rerun()
 
-    st.divider()
-    st.subheader("🗑️ 登録済みデータの一覧・削除")
-    if not df.empty:
-        st.write("一覧表（ここから内容の確認ができます）")
-        st.dataframe(df, use_container_width=True)
-        
-        del_idx = st.number_input("削除したい行番号を入力してください", min_value=0, max_value=len(df)-1, step=1)
-        if st.button("選択した行を削除"):
-            df = df.drop(df.index[del_idx])
-            df.to_csv(FILE_NAME, index=False)
-            st.warning("データを削除しました。")
-            st.rerun()
+# ①コース登録 (簡略版)
+with tab1:
+    st.header("①コース商品登録")
+    c_name = st.text_input("コース商品名")
+    if 'temp_items' not in st.session_state: st.session_state.temp_items = []
+    
+    if st.button("+ 料理枠を追加"):
+        st.session_state.temp_items.append({"name": "", "type": st.session_state.master_dish_types[0], "allergen": "", "meat": st.session_state.master_meat_types[0]})
+    
+    for i, item in enumerate(st.session_state.temp_items):
+        with st.expander(f"料理 {i+1}"):
+            item['name'] = st.text_input(f"料理名 {i+1}", key=f"name_{i}")
+            item['type'] = st.selectbox(f"種類 {i+1}", st.session_state.master_dish_types, key=f"type_{i}")
+            item['allergen'] = st.text_input(f"アレルゲン {i+1}", key=f"all_{i}", help="小麦、卵など")
+            item['meat'] = st.selectbox(f"肉 {i+1}", st.session_state.master_meat_types, key=f"meat_{i}")
+
+    if st.button("コース全体を保存"):
+        st.session_state.courses.append({"name": c_name, "items": st.session_state.temp_items})
+        st.success(f"コース「{c_name}」を保存しました")
+
+# ③代案登録
+with tab3:
+    st.header("③代案商品登録")
+    with st.form("alt_form"):
+        alt_n = st.text_input("代案商品名")
+        alt_t = st.selectbox("対象となる料理の種類", st.session_state.master_dish_types)
+        alt_m = st.selectbox("肉の種類", st.session_state.master_meat_types)
+        alt_s = st.text_input("調味料(味付け)")
+        if st.form_submit_button("代案を登録"):
+            st.session_state.alternatives.append({"name": alt_n, "type": alt_t, "meat": alt_m, "seasoning": alt_s})
+            st.success("代案を登録しました")
+
+# ④判定ページ
+with tab4:
+    st.header("④判定ページ")
+    course_list = [c['name'] for c in st.session_state.courses]
+    selected_c = st.selectbox("コース選択", course_list)
+    target = st.text_input("判定したいキーワード（小麦、豚肉など）")
+    
+    if st.button("判定開始"):
+        course = next((c for c in st.session_state.courses if c['name'] == selected_c), None)
+        if course:
+            hit_flag = False
+            for dish in course['items']:
+                # 小麦アレルギー等の成分判定
+                is_hit = (target in dish['allergen']) or (target == dish['meat'])
+                color = "red" if is_hit else "black"
+                st.markdown(f"<span style='color:{color}; font-weight:bold;'>・{dish['name']}</span>", unsafe_allow_html=True)
+                if is_hit: hit_flag = True
+            
+            if hit_flag:
+                if st.button("代案しますか？"):
+                    st.subheader("代案リスト")
+                    for dish in course['items']:
+                        is_hit = (target in dish['allergen']) or (target == dish['meat'])
+                        if is_hit:
+                            alt = next((a for a in st.session_state.alternatives if a['type'] == dish['type']), None)
+                            if alt: st.success(f"【代案】{alt['name']} (味付: {alt['seasoning']})")
+                            else: st.warning(f"{dish['name']} の代案が見つかりません")
+                        else: st.text(f"・{dish['name']}")
